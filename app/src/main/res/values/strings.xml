@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Dictaphone</string>
+    <string name="enter_filename">Add a name to this recording</string>
+    <string name="confirm">Confirm</string>
+    <string name="record_audio_content_description">record</string>
+    <string name="play_audio_content_description">play</string>
+    <string name="stop_audio_content_description">stop</string>
+</resources>
