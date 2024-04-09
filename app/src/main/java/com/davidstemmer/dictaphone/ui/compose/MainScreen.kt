@@ -52,7 +52,7 @@ object MainScreen {
                 RemoveWhen(condition = uiState.audioState is AudioState.Playback) {
                     RecordAudioButton(
                         audioState = uiState.audioState,
-                        hasRecordAudioPermission = uiState.permissions.recordAudio,
+                        hasRecordAudioPermission = uiState.permissionState.recordAudio,
                         onRecord = onRecord,
                     )
                 }

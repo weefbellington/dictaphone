@@ -10,7 +10,7 @@ import java.io.Closeable
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
-class SimpleMediaRecorder(context: Context, private val mediaRepository: MediaRepository) {
+class SimpleMediaRecorder(context: Context, private val mediaRepository: SimpleMediaRepository) {
 
     private val contentResolver by lazy { context.contentResolver }
     private val recorder: MediaRecorder by lazy {
@@ -77,10 +77,11 @@ class SimpleMediaRecorder(context: Context, private val mediaRepository: MediaRe
     fun stopRecording(): StopResult {
         return try {
             recorder.stop()
-            recorder.reset()
             StopResult.Success
         } catch (e: Throwable) {
             StopResult.Failure(e)
+        } finally {
+            recorder.reset()
         }
     }
 }
