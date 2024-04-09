@@ -7,22 +7,29 @@ import android.os.StrictMode.VmPolicy
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.annotation.CheckResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.lifecycleScope
-import com.davidstemmer.dictaphone.media.MediaRepository
+import com.davidstemmer.dictaphone.media.SimpleMediaRepository
 import com.davidstemmer.dictaphone.media.SimpleMediaPlayer
 import com.davidstemmer.dictaphone.media.SimpleMediaRecorder
 import com.davidstemmer.dictaphone.permissions.Permission
-import com.davidstemmer.dictaphone.permissions.PermissionRequest
-import com.davidstemmer.dictaphone.permissions.hasPermission
-import com.davidstemmer.dictaphone.routing.PlaybackRouter
-import com.davidstemmer.dictaphone.routing.RecordingRouter
-import com.davidstemmer.dictaphone.routing.RepositoryRouter
-import com.davidstemmer.dictaphone.routing.Switchboard
+import com.davidstemmer.dictaphone.switchboard.FilesChanged
+import com.davidstemmer.dictaphone.switchboard.MediaPlayer
+import com.davidstemmer.dictaphone.routing.PermissionsRouter
+import com.davidstemmer.dictaphone.routing.MediaPlayerRouter
+import com.davidstemmer.dictaphone.switchboard.MediaRecorder
+import com.davidstemmer.dictaphone.routing.MediaRecorderRouter
+import com.davidstemmer.dictaphone.switchboard.MediaRepository
+import com.davidstemmer.dictaphone.routing.MediaRepositoryRouter
+import com.davidstemmer.dictaphone.switchboard.SwitchboardOutput
+import com.davidstemmer.dictaphone.switchboard.Permissions
+import com.davidstemmer.dictaphone.switchboard.PermissionsUpdated
+import com.davidstemmer.dictaphone.switchboard.PlaybackStatusChanged
+import com.davidstemmer.dictaphone.switchboard.RecordingStatusChanged
+import com.davidstemmer.dictaphone.switchboard.Switchboard
 import com.davidstemmer.dictaphone.ui.compose.Dialogs
 import com.davidstemmer.dictaphone.ui.compose.MainScreen
 import com.davidstemmer.dictaphone.ui.compose.MediaSelectedCallback
@@ -32,9 +39,6 @@ import com.davidstemmer.dictaphone.ui.data.DialogType
 import com.davidstemmer.dictaphone.ui.data.UiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import com.davidstemmer.dictaphone.routing.Switchboard.Action
-import com.davidstemmer.dictaphone.routing.Switchboard.Callback
-import com.davidstemmer.dictaphone.routing.Switchboard.Output
 import kotlinx.coroutines.launch
 
 
@@ -53,7 +57,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val model = Model()
-    private val mediaRepository = MediaRepository(this)
+    private val mediaRepository = SimpleMediaRepository(this)
     private val mediaPlayer = SimpleMediaPlayer(this)
     private val recorder = SimpleMediaRecorder(this, mediaRepository)
 
@@ -61,12 +65,13 @@ class MainActivity : ComponentActivity() {
 
         super.onCreate(savedInstanceState)
 
-        setStrictModeEnabled(false)
+        setStrictModeEnabled(true)
 
-        val recordingStateRouter = RecordingRouter(recorder)
-        val repositoryRouter = RepositoryRouter(mediaRepository)
-        val playbackRouter = PlaybackRouter(mediaPlayer)
-        val effectRouters = listOf(recordingStateRouter, repositoryRouter, playbackRouter)
+        val permissionsRouter = PermissionsRouter(this)
+        val recordingStateRouter = MediaRecorderRouter(recorder)
+        val repositoryRouter = MediaRepositoryRouter(mediaRepository)
+        val mediaPlayerRouter = MediaPlayerRouter(mediaPlayer)
+        val effectRouters = listOf(permissionsRouter, recordingStateRouter, repositoryRouter, mediaPlayerRouter)
 
         val switchboard = Switchboard(
             effectRouters = effectRouters,
@@ -74,41 +79,34 @@ class MainActivity : ComponentActivity() {
         )
 
         routeOutputToViewModel(switchboard)
-        initializeMediaListener(switchboard)
-        initializePermissions(switchboard)
 
-        switchboard.dispatch(Action.FetchRecordingData)
-
-        // This request must be initialized in onCreate because it registers an ActivityResult.
-        // Doing it later (in a callback, for example) will trigger an IllegalStateException/
-        val recordAudioPermissionRequest = createRecordAudioPermissionRequest(switchboard)
+        switchboard.dispatch(Permissions.Initialize)
+        switchboard.dispatch(MediaRepository.ScanForMediaFiles)
 
         setMainContent(
             onRecord = { permissionGranted ->
-                if (permissionGranted) { switchboard.dispatch(Action.ToggleRecording) }
-                else { recordAudioPermissionRequest.launch() }
+                if (permissionGranted) {
+                    switchboard.dispatch(MediaRecorder.ToggleRecording)
+                }
+                else {
+                    switchboard.dispatch(Permissions.Request(Permission.RECORD_AUDIO))
+                }
             },
-            onPlay = { index, mediaId -> switchboard.dispatch(Action.StartPlayback(index, mediaId)) },
-            onStop = { _, _ -> switchboard.dispatch(Action.StopPlayback) },
-            onFilenameSelected = { uri, name ->
-                switchboard.dispatch(Action.UpdateFilename(uri, name))
-            },
-
+            onPlay = { index, mediaId -> switchboard.dispatch(
+                MediaPlayer.Start(index, mediaId)
+            )},
+            onStop = { _, _ -> switchboard.dispatch(
+                MediaPlayer.Stop
+            )},
+            onFilenameSelected = { uri, name -> switchboard.dispatch(
+                MediaRepository.UpdateFilename(uri, name)
+            )},
         )
     }
 
     override fun onDestroy() {
         super.onDestroy()
         mediaPlayer.release()
-    }
-
-    private fun initializeMediaListener(switchboard: Switchboard) {
-        mediaPlayer.addListener { event ->
-            val action = when (event) {
-                is SimpleMediaPlayer.Event.PlaylistFinished -> Callback.MediaPlayer.PlaylistFinished
-            }
-            switchboard.dispatch(action)
-        }
     }
 
     private fun routeOutputToViewModel(switchboard: Switchboard) {
@@ -120,25 +118,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun showToasts(output: Output) {
+    private fun showToasts(output: SwitchboardOutput) {
         when (output) {
-            is Output.RecordingStatusChanged.Started -> showRecordingToast(true)
-            is Output.RecordingStatusChanged.Stopped -> showRecordingToast(false)
-            is Output.RecordingStatusChanged.Failed -> showRecordingErrorToast()
+            is RecordingStatusChanged.Started -> showRecordingToast(true)
+            is RecordingStatusChanged.Stopped -> showRecordingToast(false)
+            is RecordingStatusChanged.Failed -> showRecordingErrorToast()
             else -> {}
-        }
-    }
-
-    private fun initializePermissions(switchboard: Switchboard) {
-        if (hasPermission(Permission.RECORD_AUDIO)) {
-            switchboard.dispatch(Callback.PermissionsRequest.RecordAudio(granted = true))
-        }
-    }
-
-    @CheckResult
-    private fun createRecordAudioPermissionRequest(switchboard: Switchboard): PermissionRequest {
-        return PermissionRequest(this, Permission.RECORD_AUDIO) { granted ->
-            switchboard.dispatch(Callback.PermissionsRequest.RecordAudio(granted))
         }
     }
 
@@ -178,44 +163,44 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun MainActivity.Model.update(output: Output) = when (output) {
-    is Output.PermissionsUpdated -> update { state ->
-        state.copy(permissions = output.permissions)
+private fun MainActivity.Model.update(output: SwitchboardOutput) = when (output) {
+    is PermissionsUpdated -> update { state ->
+        state.copy(permissionState = output.permissionState)
     }
-    is Output.RecordingStatusChanged.Started -> update { state ->
+    is RecordingStatusChanged.Started -> update { state ->
         state.copy(
             showDialog = DialogType.None,
             audioState = AudioState.Recording
         )
     }
-    is Output.RecordingStatusChanged.Stopped -> update { state ->
+    is RecordingStatusChanged.Stopped -> update { state ->
         state.copy(
             showDialog = DialogType.EditFilename(output.uri),
             audioState = AudioState.Idle
         )
     }
-    is Output.RecordingStatusChanged.Failed -> update { state ->
+    is RecordingStatusChanged.Failed -> update { state ->
         state.copy(
             showDialog = DialogType.None,
             audioState = AudioState.Idle
         )
     }
-    is Output.PlaybackStatusChanged.Playing -> update { state ->
+    is PlaybackStatusChanged.Playing -> update { state ->
         state.copy(
             audioState = AudioState.Playback(output.mediaId, output.position, output.progress)
         )
     }
-    is Output.PlaybackStatusChanged.Stopped -> update { state ->
+    is PlaybackStatusChanged.Stopped -> update { state ->
         state.copy(
             audioState = AudioState.Idle
         )
     }
-    is Output.FilesChanged -> update { state ->
+    is FilesChanged -> update { state ->
         state.copy(
             audioMetadata = output.recordings
         )
     }
-    is Output.PlaybackStatusChanged.Started -> update { state ->
+    is PlaybackStatusChanged.Started -> update { state ->
         state.copy(
             audioState = AudioState.Playback("", 0, 0f)
         )

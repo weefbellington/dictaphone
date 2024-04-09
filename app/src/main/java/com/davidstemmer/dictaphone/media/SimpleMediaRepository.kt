@@ -12,7 +12,7 @@ import android.provider.MediaStore.Audio.Media
 import com.davidstemmer.dictaphone.data.AudioMetadata
 import java.util.concurrent.TimeUnit
 
-class MediaRepository(private val context: Context) {
+class SimpleMediaRepository(private val context: Context) {
 
     private val contentResolver by lazy { context.contentResolver }
 

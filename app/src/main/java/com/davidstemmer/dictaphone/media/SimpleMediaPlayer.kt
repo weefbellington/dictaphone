@@ -5,17 +5,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.davidstemmer.dictaphone.data.AudioMetadata
-
-typealias EventListener = (SimpleMediaPlayer.Event) -> Unit
+import kotlin.math.min
 
 class SimpleMediaPlayer(context: Context): Player.Listener {
-
-    private var isReloadingPlaylist = false
-
-    sealed interface Event {
-        /** Triggered when the playlist has run out of items. */
-        data object PlaylistFinished: Event
-    }
 
     private val player by lazy {
         val player = ExoPlayer.Builder(context).build()
@@ -23,14 +15,15 @@ class SimpleMediaPlayer(context: Context): Player.Listener {
         player
     }
 
-    private val listeners = mutableListOf<EventListener>()
+    val nextMediaItemIndex: Int
+        get() = player.nextMediaItemIndex
 
     val currentMediaId: String
         get() = player.currentMediaItem?.mediaId ?: ""
 
     val currentProgress: Float
         get() = if (player.duration > 0) {
-            player.currentPosition.toFloat() / player.duration.toFloat()
+            min(player.currentPosition.toFloat() / player.duration.toFloat(), 1.0f)
         } else 0.0f
 
     /**
@@ -47,7 +40,6 @@ class SimpleMediaPlayer(context: Context): Player.Listener {
      * @param dataList the items to play
      */
     fun play(dataList: List<AudioMetadata>) {
-        isReloadingPlaylist = true
         player.clearMediaItems()
         dataList.forEach { item ->
             val mediaItem = MediaItem.Builder()
@@ -67,33 +59,7 @@ class SimpleMediaPlayer(context: Context): Player.Listener {
 
     fun release() {
         stop()
-        listeners.clear()
         player.removeListener(this)
         player.release()
-    }
-
-    fun addListener(listener: EventListener) {
-        listeners.add(listener)
-    }
-
-    private fun notify(event: Event) {
-        listeners.forEach { listener ->
-            listener(event)
-        }
-    }
-
-    override fun onPlaybackStateChanged(playbackState: Int) {
-        super.onPlaybackStateChanged(playbackState)
-        // STATE_ENDED will trigger every time clearMediaItems() is called, but we only want to
-        // notify listeners when the playlist reaches the end naturally. Set a flag before calling
-        // clearMediaItems() and clear it in STATE_READY, after it begins to play.
-        when (playbackState) {
-            Player.STATE_ENDED -> {
-                if (!isReloadingPlaylist) {
-                    notify(Event.PlaylistFinished) }
-                }
-            Player.STATE_READY -> isReloadingPlaylist = false
-            else -> {}
-        }
     }
 }
